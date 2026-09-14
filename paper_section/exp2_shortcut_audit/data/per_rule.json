@@ -1,0 +1,85 @@
+{
+  "ceiling": {
+    "linear_probe_centroid_R2_holdout": 0.9994,
+    "linear_probe_centroid_err_m": 0.113,
+    "hand_pipeline_holdout_acc": 1.0
+  },
+  "leak_scalar_s": {
+    "overall": {
+      "side_acc": 0.8781094527363185,
+      "median_err": 0.004589595524005446,
+      "mean_err": 0.5819352767309769,
+      "n": 2412
+    },
+    "semantic": {
+      "n": 588,
+      "side_acc": 0.5,
+      "exact_slot_acc": 0.5,
+      "median_err": 2.3712202836850205
+    },
+    "wall": {
+      "n": 672,
+      "side_acc": 1.0,
+      "exact_slot_acc": 1.0,
+      "median_err": 0.0036675696467021973
+    },
+    "window": {
+      "n": 1152,
+      "side_acc": 1.0,
+      "exact_slot_acc": 1.0,
+      "median_err": 0.003371065806921242
+    }
+  },
+  "leak_scalar_mag_side": {
+    "overall": {
+      "side_acc": 0.8772802653399668,
+      "median_err": 0.002517379003698148,
+      "mean_err": 0.5858487519499117,
+      "n": 2412
+    },
+    "semantic": {
+      "n": 588,
+      "side_acc": 0.4965986394557823,
+      "exact_slot_acc": 0.4965986394557823,
+      "median_err": 4.744446148903853
+    },
+    "wall": {
+      "n": 672,
+      "side_acc": 1.0,
+      "exact_slot_acc": 1.0,
+      "median_err": 0.0011622304213703462
+    },
+    "window": {
+      "n": 1152,
+      "side_acc": 1.0,
+      "exact_slot_acc": 1.0,
+      "median_err": 0.0029884079753163045
+    }
+  },
+  "deidentified_round5": {
+    "overall": {
+      "side_acc": 0.7054311774461028,
+      "median_err": 0.06373241073328953,
+      "mean_err": 1.2167634948736887,
+      "n": 4824
+    },
+    "semantic": {
+      "n": 1176,
+      "side_acc": 0.6445578231292517,
+      "exact_slot_acc": 0.6130952380952381,
+      "median_err": 0.02392581051292695
+    },
+    "wall": {
+      "n": 1344,
+      "side_acc": 0.7663690476190477,
+      "exact_slot_acc": 0.7090773809523809,
+      "median_err": 0.018045483896678177
+    },
+    "window": {
+      "n": 2304,
+      "side_acc": 0.7009548611111112,
+      "exact_slot_acc": 0.5234375,
+      "median_err": 0.3828967415658685
+    }
+  }
+}

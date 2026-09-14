@@ -1,0 +1,15 @@
+{
+  "dataset_split": {
+    "train_pct": 60,
+    "val_pct": 20,
+    "test_pct": 20,
+    "train_count": 36180,
+    "val_count": 12060,
+    "test_count": 12060,
+    "total": 60300
+  },
+  "metrics": {
+    "best_val_mse": 0.00034740116097964346,
+    "final_test_mse": 0.0003569615073502064
+  }
+}

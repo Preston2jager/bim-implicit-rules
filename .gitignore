@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------- Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# ---------------------------------------------------------------- Environments
+.venv
+
+# ---------------------------------------------------------------- Tooling caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------- Rust sampler
+sdf_sampler/target/
+
+# ---------------------------------------------------------------- Run archives
+# data/ is 352 GB of IFC variants, SDF samples, graphs and checkpoints. It is
+# never committed; data/README.md documents what belongs there and which run
+# backs which number in the paper. The two README files are the exception.
+data/*
+!data/README.md
+!data/input/
+
+# Model checkpoints anywhere. Large, binary, and regenerable from a run.
+*.ckpt
+*.msgpack
+checkpoints/
+checkpoints_hash/
+graphormer_jax_split_checkpoints/
+
+# ---------------------------------------------------------------- Editor / agent
+.vscode/
+.claude/
+.idea/
+.DS_Store
+
+# ---------------------------------------------------------------- Not published
+# Manuscript drafts, the working experiment log, agent notes and provenance-only
+# scripts stay local. The paper's numbers are in paper_section/exp*/data/.
+paper_section/Manuscript*
+paper_section/experiments.md
+docs/
+scratch/
+archive/

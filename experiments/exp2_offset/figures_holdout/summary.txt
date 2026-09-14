@@ -1,0 +1,28 @@
+=== Global metrics ===
+  total_doors_evaluated   : 3844.0000
+  mean_euclidean_error    : 3.4287
+  median_euclidean_error  : 3.4076
+  rmse_euclidean          : 3.4349
+  std_euclidean_error     : 0.2057
+  max_euclidean_error     : 4.0039
+  mean_signed_dx          : 0.1219
+  mean_signed_dy          : -0.1106
+  frac > 0.2 m           : 3844 (100.00%)
+  frac > 0.3 m           : 3844 (100.00%)
+  frac > 0.4 m           : 3844 (100.00%)
+  frac > 0.5 m           : 3844 (100.00%)
+
+=== Worst 12 test doors ===
+   err(m)  door          L     R  pred            true
+    4.004  0i$VJnJO    Abs  2200  (  2.93,  0.21)  (  1.08,  3.76)
+    3.989  0i$VJnJO    Abs  2300  (  2.95,  0.24)  (  1.08,  3.76)
+    3.988  0i$VJnJO    Abs  2200  (  2.90,  0.21)  (  1.08,  3.76)
+    3.987  0i$VJnJO    Abs  2300  (  2.95,  0.24)  (  1.08,  3.76)
+    3.987  0i$VJnJO    Abs  2800  (  2.95,  0.23)  (  1.08,  3.76)
+    3.986  0i$VJnJO    Abs  2200  (  2.92,  0.22)  (  1.08,  3.76)
+    3.985  0i$VJnJO    Abs  2400  (  2.92,  0.22)  (  1.08,  3.76)
+    3.985  0i$VJnJO    Abs  2300  (  2.94,  0.23)  (  1.08,  3.76)
+    3.984  0i$VJnJO    Abs   100  (  2.92,  0.22)  (  1.08,  3.76)
+    3.980  0i$VJnJO    Abs  2200  (  2.92,  0.23)  (  1.08,  3.76)
+    3.979  0i$VJnJO    Abs  2800  (  2.93,  0.23)  (  1.08,  3.76)
+    3.977  0i$VJnJO    Abs  2900  (  2.89,  0.21)  (  1.08,  3.76)

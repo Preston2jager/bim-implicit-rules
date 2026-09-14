@@ -1,0 +1,48 @@
+cff-version: 1.2.0
+message: If you use this code or the benchmark it generates, please cite the paper below.
+title: "SDF_3: learning implicit design rules from BIM geometry"
+abstract: >-
+  Code and per-experiment reproduction scripts for a controlled study in which a graph
+  transformer infers where along its host wall an omitted door belongs, from
+  pose-conditioned neural signed distance function embeddings and IFC topology alone,
+  with coordinates withheld and evaluation restricted to unseen rigid transforms.
+type: software
+authors:
+  - family-names: Du
+    given-names: Sang
+    affiliation: "School of Engineering, RMIT University"
+    email: sang.du@student.rmit.edu.au
+  - family-names: Hou
+    given-names: Lei
+    affiliation: "School of Engineering, RMIT University"
+    email: lei.hou@rmit.edu.au
+  - family-names: Zhang
+    given-names: Guomin
+    name-suffix: Kevin
+    affiliation: "School of Engineering, RMIT University"
+    email: kevin.zhang@rmit.edu.au
+keywords:
+  - building information modelling
+  - automated compliance checking
+  - tacit design knowledge
+  - graph transformer
+  - neural signed distance function
+  - spatial reasoning
+license: CC-BY-4.0
+preferred-citation:
+  type: article
+  title: >-
+    Learning Implicit Design Rules from BIM Geometry for Automated Design Review:
+    A Controlled Study of Graph Transformers over Neural Signed Distance Function
+    Embeddings
+  authors:
+    - family-names: Du
+      given-names: Sang
+    - family-names: Hou
+      given-names: Lei
+    - family-names: Zhang
+      given-names: Guomin
+      name-suffix: Kevin
+  journal: Buildings
+  year: 2026
+  notes: Submitted. Update the volume, article number and DOI on acceptance.

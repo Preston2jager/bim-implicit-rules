@@ -1,0 +1,11 @@
+2026-07-10 06:29:56.380 | INFO     | src.DataPreprocessor:_run_combinatorial_graphs:1593 - Generating combinatorial graphs from 10 rotated/translated IFC files... (holding out 1 copy/copies as unseen test: aug ids [10])
+2026-07-10 06:31:47.676 | INFO     | src.DataPreprocessor:_run_combinatorial_graphs:1687 - Extracting base graph template from: wall_variants_aug_9.ifc [HELD-OUT unseen test]
+2026-07-10 06:33:33.724 | INFO     | src.Graphormer:_run_with_split:2240 - Dataset split summary | Total: 34596 | Train (60%): 20757 | Val (20%): 6919 | Test (20%): 6920
+2026-07-10 06:35:04.486 | INFO     | src.Graphormer:_run_with_split:2289 - Coordinate head: ABSOLUTE | world = predicted coordinate (wall anchor disabled)
+2026-07-10 09:50:54.131 | SUCCESS  | src.Graphormer:_run_with_split:2386 - Restored best model from validation with Val MSE: 0.010904
+2026-07-10 09:51:18.594 | SUCCESS  | src.Graphormer:_run_with_split:2412 - Final Test Evaluation MSE Loss: 0.011151
+2026-07-10 09:53:21.490 | INFO     | src.Graphormer:_run_test_evaluation:1680 - Mean Euclidean Error : 0.0856 m
+2026-07-10 09:54:34.135 | INFO     | src.Graphormer:_run_test_evaluation:1680 - Mean Euclidean Error : 4.0419 m
+2026-07-10 09:54:36.025 | INFO     | __main__:_log_seen_vs_holdout:279 - Seen test split       0.0856    0.0744    0.1035     6920
+2026-07-10 09:54:36.025 | INFO     | __main__:_log_seen_vs_holdout:279 - Unseen holdout        4.0419    4.0572    4.6291     3844
+2026-07-10 09:54:36.025 | INFO     | __main__:_log_seen_vs_holdout:286 - Generalization gap (holdout - test): +3.9563 m  (47.19x)

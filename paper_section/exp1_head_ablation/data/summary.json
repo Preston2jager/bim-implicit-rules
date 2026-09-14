@@ -1,0 +1,52 @@
+{
+  "absolute": {
+    "seen": {
+      "mean_euclidean_error": 0.08564903919880315,
+      "median_euclidean_error": 0.07439456601222705,
+      "left_right_accuracy": null,
+      "n_doors": 6920
+    },
+    "holdout": {
+      "mean_euclidean_error": 4.041906678874207,
+      "median_euclidean_error": 4.057238076518294,
+      "left_right_accuracy": null,
+      "n_doors": 3844
+    },
+    "gap_ratio": 47.19150053151662
+  },
+  "offset": {
+    "seen": {
+      "mean_euclidean_error": 0.07782120583199621,
+      "median_euclidean_error": 0.06585172934127115,
+      "left_right_accuracy": null,
+      "n_doors": 6920
+    },
+    "holdout": {
+      "mean_euclidean_error": 3.4287130908213013,
+      "median_euclidean_error": 3.4076414191641007,
+      "left_right_accuracy": null,
+      "n_doors": 3844
+    },
+    "gap_ratio": 44.05885329280756
+  },
+  "scalar_s (axis-product)": {
+    "seen": {
+      "mean_euclidean_error": 0.04689160045109408,
+      "median_euclidean_error": 0.0369820202331306,
+      "left_right_accuracy": 1.0,
+      "n_doors": 6920
+    },
+    "holdout": {
+      "mean_euclidean_error": 3.862383588069585,
+      "median_euclidean_error": 3.7850716844038717,
+      "left_right_accuracy": 0.0,
+      "n_doors": 3844
+    },
+    "gap_ratio": 82.36834637576264,
+    "mirror_signature": {
+      "corr_s_true_s_pred": -0.9994510537647139,
+      "mean_abs_s_pred": 1.4873837216482977,
+      "mean_abs_s_true": 2.3749998211860657
+    }
+  }
+}

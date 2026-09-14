@@ -1,0 +1,6 @@
+2026-07-10 11:00:07.146 | INFO     | src.Graphormer:_run_with_split:2321 - Coordinate head: OFFSET | world = wall_center + pred (2D residual)
+2026-07-10 14:18:18.690 | SUCCESS  | src.Graphormer:_run_with_split:2420 - Restored best model from validation with Val MSE: 0.009326
+2026-07-10 14:18:40.164 | SUCCESS  | src.Graphormer:_run_with_split:2447 - Final Test Evaluation MSE Loss: 0.009570
+2026-07-10 14:22:03.377 | INFO     | __main__:_log_seen_vs_holdout:320 - Seen test split       0.0778    0.0659    0.0973     6920
+2026-07-10 14:22:03.377 | INFO     | __main__:_log_seen_vs_holdout:320 - Unseen holdout        3.4287    3.4076    3.4349     3844
+2026-07-10 14:22:03.377 | INFO     | __main__:_log_seen_vs_holdout:327 - Generalization gap (holdout - test): +3.3509 m  (44.06x)

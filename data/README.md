@@ -45,6 +45,7 @@ Confirmed against each `paper_section/exp*/extract_data.py`.
 | 5, GINE baseline | `2026JUL122211`, arm `gin_scalar_s_pose_w0.3` against `scalar_s_pose_w0.3` in the same run |
 | 6, failure anatomy | `2026JUL122211`, arm `scalar_s_pose_w0.3` |
 | 7, single-rule ablation | `2026JUL122211`, arms `ablation_six_window`, `ablation_single_wall`, `ablation_semantic` |
+| 11, second plan topology | `V2_P2_inductive` (81 copies; arms `REV_P2_s42`, `REV_P2_s1`, `REV_P2_s2`, `REV_P2_w0_s42`), `V2_P2_161_inductive` (161 copies; `REV_P2_161_s42`), and `V2_inductive` + `V2_P2x1_extra` for the cross-plan arm `REV_P1_s42_x2`. Built by `scripts/v2/`, see `paper_section/exp11_second_topology/README.md` |
 
 **`2026JUL122211` is the run to keep if only one can be kept.** It carries all five arms that
 Experiments 4 to 7 read, and its holdout report is the source of the paper's 92.7% side

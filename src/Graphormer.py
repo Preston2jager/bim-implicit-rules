@@ -364,6 +364,17 @@ class LatentCodePredictionModel(nn.Module):
     # Pose-distillation aux head (config: training.graphormer.pose_distill_weight > 0).
     # Kept optional so checkpoints from runs without it still restore.
     use_pose_head: bool = False
+    # T07-13 ablation (config: training.graphormer.use_structural_encoding, default True):
+    # when False, the shortest-path-distance bias (`b`, from SpatialEncoding) and the
+    # edge-path encoding bias (`cij`, from EdgeEncoding inside each attention head) are
+    # both zeroed after being computed, so attention falls back to plain dense
+    # self-attention over node content alone -- structural encodings are the ONLY thing
+    # disabled (node/edge embeddings, centrality encoding and everything else are
+    # unchanged). The SpatialEncoding/EdgeEncoding parameters still exist (so this can be
+    # flipped without changing the checkpoint's param tree), their contribution is just
+    # multiplied out. Default True preserves the exact prior behaviour for every existing
+    # run and checkpoint.
+    use_structural_encoding: bool = True
 
     @nn.compact
     def __call__(self, type_features, num_nodes, edge_index, edge_types, spatial_indices, edge_path_indices, edge_path_mask, target_indices=None, external_node_embeddings=None):
@@ -377,16 +388,21 @@ class LatentCodePredictionModel(nn.Module):
                 depth=self.node_depth,
                 name='node_encoder'
             )(type_features, num_nodes)
-            
+
         num_edge_types = 10
         edge_emb_layer = nn.Embed(num_embeddings=num_edge_types, features=self.edge_dim, name='edge_type_embedding')
         edge_attr = edge_emb_layer(edge_types)
-        
+
         spatial_matrix = SpatialEncoding(
             max_path_distance=self.max_path_distance,
             name='spatial_encoding'
         )(spatial_indices)
-        
+        if not self.use_structural_encoding:
+            # Zero both structural biases: spatial_matrix -> b=0 in attention; zeroing the
+            # edge_path_mask makes EdgeEncoding's cij=0 too (its denominator floors at 1).
+            spatial_matrix = jnp.zeros_like(spatial_matrix)
+            edge_path_mask = jnp.zeros_like(edge_path_mask)
+
         x = node_embeddings
         x = nn.Dense(self.d_model, name='node_in_lin')(x)
         edge_attr = nn.Dense(self.edge_dim, name='edge_in_lin')(edge_attr)
@@ -493,19 +509,80 @@ class GINEBaselineLayer(nn.Module):
         return x + h
 
 
+class GATBaselineLayer(nn.Module):
+    """
+    One pre-norm residual GAT block (Velickovic et al. 2018, multi-head local attention),
+    GATv2-style scoring (edge features enter the key before the score, so it can reuse the
+    same edge_type embeddings as GINE/Graphormer instead of ignoring them).
+
+    Added for Reviewer 3's request for another representative geometric-DL baseline: this is
+    the "local, learned attention" point in between GINEBaselineLayer (local, fixed
+    mean-aggregation) and the Graphormer (global, dense attention) -- same node encoder,
+    heads, losses, batching, split and budget as both, via GNNBaselineModel(layer_type='gat').
+
+    Same one-directional edge storage as GINE (see GINEBaselineLayer docstring): edges are
+    doubled here ([src,dst] + [dst,src]) so every node attends over both directions of its
+    stored links, then softmax-normalised per destination node with jax.ops.segment_max/sum.
+    Padded edges are self-loops on the last PAD node (see _to_host_batch), doubling a self-loop
+    is still a self-loop, so padding still never injects messages into real nodes.
+    """
+    node_dim: int
+    edge_dim: int
+    ff_dim: int
+    n_heads: int = 4
+
+    @nn.compact
+    def __call__(self, x, edge_attr, edge_index):
+        num_nodes = x.shape[0]
+        H = self.n_heads
+        assert self.node_dim % H == 0, f"node_dim ({self.node_dim}) must be divisible by n_heads ({H})"
+        Dh = self.node_dim // H
+        norm_x = nn.LayerNorm(name='ln')(x)
+        e = nn.Dense(self.node_dim, name='edge_proj')(edge_attr)
+        src = jnp.concatenate([edge_index[0], edge_index[1]])
+        dst = jnp.concatenate([edge_index[1], edge_index[0]])
+        e2 = jnp.concatenate([e, e], axis=0).reshape(-1, H, Dh)
+
+        q = nn.Dense(self.node_dim, name='q_proj')(norm_x).reshape(num_nodes, H, Dh)
+        k = nn.Dense(self.node_dim, name='k_proj')(norm_x).reshape(num_nodes, H, Dh)
+        v = nn.Dense(self.node_dim, name='v_proj')(norm_x).reshape(num_nodes, H, Dh)
+
+        k_edge = k[src] + e2
+        v_edge = v[src] + e2
+        attn_a = self.param('attn_a', nn.initializers.normal(0.02), (H, Dh))
+        scores = jnp.sum(nn.leaky_relu(q[dst] + k_edge) * attn_a[None, :, :], axis=-1)  # [2E, H]
+
+        scores_max = jax.ops.segment_max(scores, dst, num_segments=num_nodes)
+        exp_scores = jnp.exp(scores - scores_max[dst])
+        denom = jax.ops.segment_sum(exp_scores, dst, num_segments=num_nodes) + 1e-9
+        alpha = exp_scores / denom[dst]  # [2E, H]
+
+        agg = jax.ops.segment_sum(alpha[..., None] * v_edge, dst, num_segments=num_nodes)
+        agg = agg.reshape(num_nodes, self.node_dim)
+
+        h = nn.Sequential([
+            nn.Dense(self.ff_dim),
+            nn.gelu,
+            nn.Dense(self.node_dim)
+        ], name='update_mlp')(agg)
+        return x + h
+
+
 class GNNBaselineModel(nn.Module):
     """
-    Architecture baseline for the paper: a standard local message-passing GNN
-    (GINE) swapped in for the Graphormer encoder stack. Everything else is
-    IDENTICAL to LatentCodePredictionModel - same HeterogeneousNodeEncoder over
-    the same pure-embedding inputs, same coordinate/pose heads, same losses,
-    batching, split and evaluation - so the comparison isolates the graph
-    encoder: global attention + centrality/spatial/edge-path structural
-    encodings vs. plain neighborhood message passing at equal depth/width.
+    Architecture baseline(s) for the paper: a standard local message-passing GNN swapped in
+    for the Graphormer encoder stack. Everything else is IDENTICAL to LatentCodePredictionModel
+    - same HeterogeneousNodeEncoder over the same pure-embedding inputs, same coordinate/pose
+    heads, same losses, batching, split and evaluation - so the comparison isolates the graph
+    encoder: global attention + centrality/spatial/edge-path structural encodings vs. plain
+    local message passing at equal depth/width.
 
-    Selected via training.graphormer.model_arch: gin (default: graphormer).
-    The Graphormer-only inputs (spatial_indices, edge_path_*) are accepted and
-    ignored; max_* fields exist only for constructor parity with the config.
+    Selected via training.graphormer.model_arch: 'gin' (mean-aggregation MPNN, default local
+    baseline) | 'gat' (local multi-head attention, see GATBaselineLayer) | else graphormer.
+    layer_type mirrors model_arch (set by the caller) and picks the per-layer block; everything
+    else about this class is architecture-agnostic. The Graphormer-only inputs (spatial_indices,
+    edge_path_*) are accepted and ignored; max_* fields exist only for constructor parity with
+    the config.
     """
     node_type_schemas: Dict[str, Dict[str, Any]]
     edge_dim: int = 64
@@ -519,6 +596,7 @@ class GNNBaselineModel(nn.Module):
     max_path_distance: int = 10  # unused
     dropout: float = 0.1
     use_pose_head: bool = False
+    layer_type: str = 'gin'
 
     @nn.compact
     def __call__(self, type_features, num_nodes, edge_index, edge_types, spatial_indices, edge_path_indices, edge_path_mask, target_indices=None, external_node_embeddings=None):
@@ -540,8 +618,9 @@ class GNNBaselineModel(nn.Module):
         x = nn.Dense(self.d_model, name='node_in_lin')(node_embeddings)
         edge_attr = nn.Dense(self.edge_dim, name='edge_in_lin')(edge_attr)
 
+        layer_cls = GATBaselineLayer if self.layer_type == 'gat' else GINEBaselineLayer
         for i in range(self.graph_depth):
-            x = GINEBaselineLayer(
+            x = layer_cls(
                 node_dim=self.d_model,
                 edge_dim=self.edge_dim,
                 ff_dim=self.ff_dim,
@@ -1241,7 +1320,8 @@ class SDFGraphormerTrainer:
     def _model_arch(self) -> str:
         """
         Graph encoder architecture: 'graphormer' (default) | 'gin' (GINE
-        message-passing baseline; see GNNBaselineModel).
+        message-passing baseline) | 'gat' (local multi-head attention baseline);
+        see GNNBaselineModel.
         """
         g = getattr(self.config.training, 'graphormer', None)
         arch = getattr(g, 'model_arch', 'graphormer') if g is not None else 'graphormer'
@@ -1731,14 +1811,19 @@ class SDFGraphormerTrainer:
                     v = getattr(graphormer_cfg, k)
                     vals[k] = float(v) if k == 'dropout' else int(v)
         pose_w = float(getattr(graphormer_cfg, 'pose_distill_weight', 0.0) or 0.0) if graphormer_cfg is not None else 0.0
+        use_struct = bool(getattr(graphormer_cfg, 'use_structural_encoding', True)) if graphormer_cfg is not None else True
         model_cls = GNNBaselineModel if self._model_arch() != 'graphormer' else LatentCodePredictionModel
         if model_cls is GNNBaselineModel and graphormer_cfg is not None:
             # Local message passing gets its own (typically deeper) depth so its
             # receptive field can span door-wall -> determining-node paths that the
             # Graphormer covers with dense attention. Falls back to graph_depth.
             vals['graph_depth'] = int(getattr(graphormer_cfg, 'gin_graph_depth', vals['graph_depth']))
-        model = model_cls(node_type_schemas=self.node_type_schemas,
-                          use_pose_head=(pose_w > 0.0), **vals)
+        extra = dict(use_pose_head=(pose_w > 0.0))
+        if model_cls is LatentCodePredictionModel:
+            extra['use_structural_encoding'] = use_struct
+        else:
+            extra['layer_type'] = self._model_arch()
+        model = model_cls(node_type_schemas=self.node_type_schemas, **extra, **vals)
         return model, vals['max_path_distance']
 
     # ===== Full test-set evaluation (Step 6) =====
@@ -2129,6 +2214,7 @@ class SDFGraphormerTrainer:
             logger.info("Loaded Graphormer configuration from YAML.")
         else:
             logger.warning("Graphormer configuration not found in training block; using defaults.")
+        use_struct = bool(getattr(graphormer_cfg, 'use_structural_encoding', True)) if graphormer_cfg is not None else True
 
         arch = self._model_arch()
         model_cls = GNNBaselineModel if arch != 'graphormer' else LatentCodePredictionModel
@@ -2136,6 +2222,7 @@ class SDFGraphormerTrainer:
             # See _build_model_from_config: deeper depth for local message passing.
             graph_depth = int(getattr(graphormer_cfg, 'gin_graph_depth', graph_depth))
         logger.info(f"Graph encoder architecture: {arch} ({model_cls.__name__}, graph_depth={graph_depth})")
+        extra = {"layer_type": arch} if model_cls is GNNBaselineModel else {"use_structural_encoding": use_struct}
         model = model_cls(
             node_type_schemas=self.node_type_schemas,
             edge_dim=edge_dim,
@@ -2147,7 +2234,8 @@ class SDFGraphormerTrainer:
             dropout=dropout,
             max_in_degree=max_in_degree,
             max_out_degree=max_out_degree,
-            max_path_distance=max_path_distance
+            max_path_distance=max_path_distance,
+            **extra
         )
 
         # Initialize model variables with JAX
@@ -2537,6 +2625,7 @@ class SDFGraphormerTrainer:
             logger.info("Loaded Graphormer configuration from YAML.")
         else:
             logger.warning("Graphormer configuration not found in training block; using defaults.")
+        use_struct = bool(getattr(graphormer_cfg, 'use_structural_encoding', True)) if graphormer_cfg is not None else True
 
         # Loud so a stale run-config snapshot can't silently drop the aux head again
         # (the 2026-07-12 retrain trained without it because the run's config copy
@@ -2545,6 +2634,9 @@ class SDFGraphormerTrainer:
             logger.success(f"Pose-distillation aux head ENABLED (weight={pose_distill_weight}).")
         else:
             logger.warning("Pose-distillation aux head DISABLED (pose_distill_weight missing or 0 in this run's config).")
+        if not use_struct:
+            logger.warning("T07-13 ablation: structural encoding (SPD + edge-path bias) DISABLED "
+                           "(training.graphormer.use_structural_encoding=false in this run's config).")
 
         arch = self._model_arch()
         model_cls = GNNBaselineModel if arch != 'graphormer' else LatentCodePredictionModel
@@ -2552,6 +2644,7 @@ class SDFGraphormerTrainer:
             # See _build_model_from_config: deeper depth for local message passing.
             graph_depth = int(getattr(graphormer_cfg, 'gin_graph_depth', graph_depth))
         logger.info(f"Graph encoder architecture: {arch} ({model_cls.__name__}, graph_depth={graph_depth})")
+        extra = {"layer_type": arch} if model_cls is GNNBaselineModel else {"use_structural_encoding": use_struct}
         model = model_cls(
             node_type_schemas=self.node_type_schemas,
             edge_dim=edge_dim,
@@ -2564,7 +2657,8 @@ class SDFGraphormerTrainer:
             max_in_degree=max_in_degree,
             max_out_degree=max_out_degree,
             max_path_distance=max_path_distance,
-            use_pose_head=(pose_distill_weight > 0.0)
+            use_pose_head=(pose_distill_weight > 0.0),
+            **extra
         )
 
         # Strict padding across all graphs, then push each to device (shared helper).

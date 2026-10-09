@@ -17,9 +17,10 @@ training.
 | `scripts/` | Entry points. `main.py` is the interactive pipeline; the rest are one-shot tools |
 | `src/` | Library code: `DataPreprocessor`, `Embedding`, `EmbeddingHash`, `Graphormer`, plus `Tools/` renderers |
 | `sdf_sampler/` | Rust SDF point sampler, std-only so it builds offline (`cargo build --release`) |
-| `paper_section/` | One self-contained directory per experiment, `exp1` to `exp7`: extraction script, extracted numbers, figure script and figures |
+| `paper_section/` | One self-contained directory per experiment, `exp1` to `exp7` and `exp11`: extraction script, extracted numbers, figure script and figures |
 | `experiments/` | Early run outputs kept because `paper_section/exp1_head_ablation` reads from them |
-| `data/input/` | The base IFC model (`Data_base_1.ifc`) and sweep configuration, 544 KB. Everything else is generated |
+| `scripts/v2/` | The inductive (v2) pipeline used for the second plan topology: train-only SDF decoder, frozen-decoder holdout fit, in-process evaluation. See `paper_section/exp11_second_topology/README.md` |
+| `data/input/` | The base IFC model (`Data_base_1.ifc`) and sweep configuration, 544 KB; `plan2/` holds the second plan (`Data_2.ifc`) and its configuration, 0.8 MB. Everything else is generated |
 | `data/runs/` | Run archives. **Not in this repository** — 126 GB. See [data/README.md](data/README.md), which also explains what makes it large |
 
 ## Environment

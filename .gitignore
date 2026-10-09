@@ -47,3 +47,9 @@ paper_section/experiments.md
 docs/
 scratch/
 archive/
+
+# ---------------------------------------------------------------- Local only
+# Hand backups of edited files, and the author's private revision workspace
+# (a symlink; the published copies of the plan-2 scripts are in scripts/v2/).
+*.bak*
+scripts/revision

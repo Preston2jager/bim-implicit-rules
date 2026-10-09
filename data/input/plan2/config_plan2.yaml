@@ -1,0 +1,210 @@
+extraction:
+    data_expand: false
+    scale: 0.1
+    # 40 -> 80 (2026-07-11): holdout side-accuracy on the semantic rule was chance
+    # with 37 training rotations - the model hallucinated one chirality per unseen
+    # transform. Doubling rotational diversity is the data-side lever for that.
+    # 80 -> 160 (2026-07-12, round 8): rounds 6/7 showed per-(copy,room) chirality is
+    # re-rolled per run regardless of distillation weight - rotation diversity is the
+    # remaining data-side lever before calling it a negative result.
+    copies: 80
+    # Max copy translation, expressed in SCALED coordinate units (world_meters * scale).
+    # 0.0 disables translation (rotation-only copies). At scale=0.1, 0.5 => up to 5 m world.
+    translation_max_scaled: 0.5
+    # Number of trailing copies held out entirely as an unseen-transform test set
+    # (excluded from the 60/20/20 split; evaluated separately). Kept proportional
+    # (3/40 -> 6/80 -> 12/160); per-copy variance is the headline uncertainty, so
+    # more holdout transforms directly tightens the estimate.
+    holdout_copies: 12
+    # Changing-wall length variants: step..max in steps of `step` (mm).
+    # 300 => 10 lengths per side (was 100 => 30), cutting per-copy object count ~3x
+    # so the copy budget above can go to rotational diversity instead.
+    wall_length_step: 300
+    wall_length_max: 3000
+    target_classes:
+        - IfcWindow
+        - IfcDoor
+        - IfcSlab
+        - IfcWall
+        - IfcColumn
+        - IfcBeam
+        - IfcSpace
+        - IfcRoof
+
+sampling:
+    # Sampler backend: 'rust' (sdf_sampler/ crate, auto-built with cargo, one thread
+    # per core) or 'python' (multiprocess pcu fallback). Rust auto-falls-back to
+    # python when the toolchain is missing.
+    backend: rust
+    min_per_surface: 500
+    # 5000 -> 10000: doubled surface sampling density after the 2026-07-10 hash-test
+    # improvements, to test whether denser supervision removes the remaining
+    # between-sample noise on large objects.
+    density_per_m2: 5000
+    min_wall_thickness: 0.1
+    levels:
+        - { radius: 0.01, count: 8 }
+        - { radius: 0.05, count: 6 }
+        - { radius: 0.2, count: 6 }
+        - { radius: 1.0, count: 4 }
+        - { radius: 2.0, count: 4 }
+        - { radius: 5.0, count: 4 }
+
+training:
+    reproducibility:
+        seed: 42 # plan 2: same as V2_inductive (was 27831)
+    
+    # Max GB of sample data (points+sdf+indices) pinned to GPU memory. Datasets
+    # above this stream host->device in chunk-shuffled batches instead (slower per
+    # epoch but VRAM-safe). Leave headroom for model/optimizer/activations on a
+    # 16 GB card.
+    max_device_data_gb: 12
+
+    traditional:
+        # 300 -> 100: the MAE curve plateaus near epoch 100 (0.0016 vs 0.0013 @300);
+        # the extra 200 epochs cost ~3.3h for <20% gain irrelevant to the door task.
+        epochs: 200
+        batch_size: 524288
+        lr_model: 0.0003
+        lr_decay_steps: 100
+        lr_decay_rate: 0.95
+        reg_weight: 0.0001
+        # Loss-based early stop (2026-07-11): epochs above is a hard cap; training
+        # stops once the mean train MAE over the last `early_stop_window` epochs
+        # drops below `early_stop_mae`. 0 disables. Threshold from the DeepSDF MAE
+        # curve: plateau begins ~0.0016; 0.002 stops shortly after the useful part.
+        early_stop_mae: 0.002
+        early_stop_window: 5
+        # Pose-probe auxiliary loss: linear head z -> object centroid forces latents to
+        # organize position linearly/smoothly, so the Graphormer can interpolate unseen
+        # rotations instead of memorizing the training copies. 0.0 disables.
+        pose_probe_weight: 0.1
+        network:
+            latent_size: 128
+            inner_dim: 512
+            num_layers: 6
+            skip_connections: true
+            use_remat: true
+            use_bfloat16: true
+
+    # Hash-grid embedding backend (menu 2.2, experimental). Same auto-decoder objective
+    # and per-instance latents as 'traditional'; only the coordinate encoding changes.
+    hash:
+        epochs: 100
+        batch_size: 524288
+        lr_model: 0.001
+        lr_decay_steps: 50
+        lr_decay_rate: 0.95
+        reg_weight: 0.0001
+        # L2 on hash-table entries (sum over the table). Cells never touched by a
+        # training sample get no data gradient; without this they stay as frozen
+        # noise and fragment the reconstructed surface between samples.
+        table_reg: 0.000001
+        # Loss-based early stop (2026-07-11): epochs is a hard cap; stop when the
+        # mean train MAE of the last `early_stop_window` epochs < `early_stop_mae`.
+        # From run 2026JUL110024's curve (final 0.0036 @100ep): rolling-5 MAE hits
+        # 0.0045 near epoch ~55 - the remaining epochs buy <25% MAE, irrelevant to
+        # the door task. 0 disables.
+        early_stop_mae: 0.0045
+        early_stop_window: 5
+        pose_probe_weight: 0.1
+        network:
+            latent_size: 128
+            levels: 16
+            features_per_level: 2
+            log2_table_size: 19
+            base_resolution: 16
+            # 1024 -> 512: geometry is box-like; the finest levels were unconstrained
+            # between samples on large objects (IfcSpace/IfcSlab) and only injected
+            # hash-collision speckle into the zero level set.
+            max_resolution: 512
+            inner_dim: 128
+            num_layers: 3
+
+    # Single-IFC hash embedding quality test (menu 2.3): samples `source_ifc`'s objects
+    # from the exported OBJs using the CURRENT `sampling:` settings above (cached in
+    # intermediate/hash_test_samples.npz; auto-resamples when sampling params change),
+    # trains only on them, then reconstructs meshes to <run>/reconstruct_hash_test/
+    # for visual inspection. Uses the training.hash network settings.
+    hash_test:
+        source_ifc: wall_variants.ifc
+        epochs: 100    # ~1.6s/epoch on the single-IFC subset; 30 was not converged
+        recon_objects: 12      # 0 = reconstruct every object of that IFC
+        recon_res: 256
+        recon_coarse_res: 48
+
+    graphormer:
+        # Graph encoder architecture: 'graphormer' (default) or 'gin' - a standard
+        # message-passing baseline (GINE: GIN with edge features + degree-normalized
+        # mean aggregation) with the SAME node encoder, heads, losses, split and
+        # training budget; only the graph encoder differs. Menu 6.2 forces 'gin'
+        # regardless of this key. Baseline checkpoints go to
+        # intermediate/gin_jax_split_checkpoints and results archive to
+        # output/experiments/gin_<head>...
+        model_arch: graphormer
+        # GIN-only depth (falls back to graph_depth): local message passing needs
+        # more hops than dense attention to cover the same node-pair paths.
+        gin_graph_depth: 8
+        # Prediction head configuration (see experiment.md):
+        #   absolute : world = pred                            (tests coordinate-system learning)
+        #   offset   : world = wall_center + pred              (2D residual; translation-invariant)
+        #   scalar_s : world = wall_center + pred_x*axis      (1-DOF along wall; transform-invariant)
+        # NOTE: offset head has a diagnosed product-trap (target = s*axis couples the
+        # transform-invariant answer with the copy rotation; SGD stalls at the
+        # conditional mean). scalar_s is the transform-invariant formulation.
+        head_mode: scalar_s
+        # Pose-distillation aux loss (2026-07-12): linear per-node head predicting each
+        # node's centroid from the final node states (coordinates are an aux TARGET,
+        # never an input; synthetic target door masked out). A linear probe proves this
+        # readout exists and transfers to unseen transforms (holdout R2 0.9994) while
+        # the door loss alone leaves the model interpolating near training poses
+        # (holdout side acc 70.5% vs provable 100% ceiling). Applied to the TRAIN loss
+        # only - Val/Test MSE and the early-stop threshold stay pure door loss.
+        # 0 disables (also removes the head so old checkpoints restore).
+        # 0.1 -> 0.3 (round 7): clear six-window gains (side 89.4->95.0, exact-slot
+        # 77.8->86.3) at ~1.2:1 aux:door gradient balance; semantic chirality unmoved
+        # by weight, so >0.3 is not worth sweeping.
+        pose_distill_weight: 0.3
+        epochs: 100
+        # Loss-based early stop (2026-07-11): epochs is a hard cap; stop once the
+        # mean Val loss of the last `early_stop_window` epochs < `early_stop_val_loss`.
+        # Units ~ m^2 (scale 0.1 x loss-factor 100): 1e-3 = ~3 cm RMS on seen data,
+        # far below the 0.95 m slot spacing. Both 100-epoch runs of 2026JUL110024
+        # crossed it at epoch ~47-50, so this roughly halves training time. 0 disables.
+        early_stop_val_loss: 0.001
+        early_stop_window: 5
+        batch_size: 64
+        # Max padded graph data pinned to GPU memory (GB). Above this the padded
+        # graphs stay in host RAM and each collated batch streams to the device
+        # per step (added 2026-07-13 after the 120k-graph round-8 run OOMed the
+        # 16 GB card; ~60k graphs ~ 10 GB fits, 120k does not).
+        max_device_data_gb: 10.0
+        # 1 = update every batch. The old default (16) meant only ~18 optimizer
+        # updates per epoch on the 30k-graph dataset - far too few to reach the
+        # ~1200-update breakthrough point of the categorical lookup.
+        accumulation_steps: 1
+        lr: 0.0002
+        edge_dim: 64
+        d_model: 256
+        n_heads: 8
+        node_depth: 2
+        graph_depth: 4
+        ff_dim: 512
+        dropout: 0.1
+        max_in_degree: 50
+        max_out_degree: 50
+        max_path_distance: 10
+
+reconstruction:
+    init_res: 512
+    coarse_res: 128
+plan:
+    base_ifc: Data_2.ifc
+    normalize_walls: true
+    recentre_slots: true
+    left_door: 0pZgeePlTAYBv0JBjbuYqs
+    room_states:
+        "1": {"100": "Toilet", "101": "Store", "102": "Corridor", "103": "LivingRoom", "104": "Store", "105": "Store", "106": "Bedroom"}
+        "2": {"100": "Store", "101": "Toilet", "102": "Corridor", "103": "LivingRoom", "104": "Store", "105": "Store", "106": "Bedroom"}
+        "3": {"100": "Store", "101": "Store", "102": "Corridor", "103": "LivingRoom", "104": "Toilet", "105": "Store", "106": "Bedroom"}
+        "4": {"100": "Store", "101": "Store", "102": "Corridor", "103": "LivingRoom", "104": "Store", "105": "Toilet", "106": "Bedroom"}

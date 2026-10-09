@@ -27,6 +27,101 @@ import ifcopenshell.guid
 import ifcopenshell.util.element
 import ifcopenshell.util.unit
 
+# ---------------------------------------------------------------------------------------
+# Plan-specific constants. DEFAULT_PLAN is the original apartment (Data_base_1.ifc); a run
+# can override any key through an optional `plan:` section of its config.yaml, which is how
+# the second plan topology (Data_2.ifc) is generated without touching the original path.
+# ---------------------------------------------------------------------------------------
+DEFAULT_PLAN = {
+    "base_ifc": "Data_base_1.ifc",
+    # Replace walls exported as several per-layer solids by ONE extrusion over the same local
+    # extent (needed for Data_2.ifc; the original export already has one solid per wall).
+    "normalize_walls": False,
+    # Anchor the six door slots on the midpoint of the two template doors (see
+    # _run_combinatorial_graphs). Off for the original plan, whose doors are symmetric.
+    "recentre_slots": False,
+    "left_wall": "02414yPEv25fF9z0uqxlni",
+    "right_wall": "3U2rKl8q5DVfhs17a5SE44",
+    "left_door": "0XVTLR_9H3Ox9MAKGyWioT",
+    "right_door": "0i$VJnJOTDM92a$t1VH2bb",
+    # Six far-end windows, LEFT TO RIGHT: (GUID, legacy Revit numeric tag).
+    "windows": [
+        ["2eYTHUu89788SZxgL5ozO4", "1667718"],
+        ["2eYTHUu89788SZxgL5ozLa", "1667558"],
+        ["2eYTHUu89788SZxgL5ozP6", "1667780"],
+        ["2eYTHUu89788SZxgL5ozUb", "1667879"],
+        ["2eYTHUu89788SZxgL5ozQu", "1667642"],
+        ["2eYTHUu89788SZxgL5ozSJ", "1667985"],
+    ],
+    # Room state -> {space Name: label}. States 1/3 put the toilet on the window-1 (slot-1)
+    # side, states 2/4 on the window-6 side; determine_door_position relies on this.
+    "room_states": {
+        1: {"100": "Toilet", "101": "Store", "102": "Bedroom", "103": "LivingRoom", "104": "Store", "105": "Store"},
+        2: {"100": "Store", "101": "Toilet", "102": "Bedroom", "103": "LivingRoom", "104": "Store", "105": "Store"},
+        3: {"100": "Store", "101": "Store", "102": "Bedroom", "103": "LivingRoom", "104": "Toilet", "105": "Store"},
+        4: {"100": "Store", "101": "Store", "102": "Bedroom", "103": "LivingRoom", "104": "Store", "105": "Toilet"},
+    },
+}
+
+
+def load_plan(work_folder) -> dict:
+    """DEFAULT_PLAN overlaid with the run config's optional `plan:` section."""
+    import copy
+    plan = copy.deepcopy(DEFAULT_PLAN)
+    cfg_path = Path(work_folder) / "input" / "input_config" / "config.yaml"
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        over = data.get("plan") or {}
+    except FileNotFoundError:
+        over = {}
+    for k, v in over.items():
+        if k not in plan:
+            raise KeyError(f"unknown plan key '{k}' in {cfg_path}")
+        plan[k] = v
+    plan["room_states"] = {int(k): {str(a): b for a, b in v.items()} for k, v in plan["room_states"].items()}
+    if over:
+        logger.info(f"Plan override from {cfg_path}: base_ifc={plan['base_ifc']}, keys={sorted(over)}")
+    return plan
+
+
+def normalize_layered_walls(model) -> int:
+    """Rewrite every IfcWall whose Body holds more than one solid as a single rectangular
+    extrusion covering the same local box (x along the wall, y across, z up). Openings are
+    untouched: they still cut the wall through IfcRelVoidsElement. Returns the count."""
+    st_local = ifcopenshell.geom.settings()
+    st_local.set("use-world-coords", False)
+    to_file = 1.0 / ifcopenshell.util.unit.calculate_unit_scale(model)
+    n = 0
+    for wall in model.by_type("IfcWall"):
+        if not wall.Representation:
+            continue
+        body = next((r for r in wall.Representation.Representations if r.RepresentationIdentifier == "Body"), None)
+        if body is None or len(body.Items) <= 1:
+            continue
+        shape = ifcopenshell.geom.create_shape(st_local, wall, body)  # keep a reference: buffers die with it
+        v = np.array(shape.geometry.verts).reshape(-1, 3) * to_file
+        (x0, y0, z0), (x1, y1, z1) = v.min(0), v.max(0)
+        prof = [[x1, y0], [x1, y1], [x0, y1], [x0, y0], [x1, y0]]
+        solid = model.create_entity(
+            "IfcExtrudedAreaSolid",
+            SweptArea=model.create_entity(
+                "IfcArbitraryClosedProfileDef", ProfileType="AREA", ProfileName=body.Items[0].SweptArea.ProfileName,
+                OuterCurve=model.create_entity(
+                    "IfcIndexedPolyCurve", SelfIntersect=False,
+                    Points=model.create_entity("IfcCartesianPointList2D", CoordList=[[float(a), float(b)] for a, b in prof]),
+                ),
+            ),
+            Position=model.create_entity("IfcAxis2Placement3D",
+                                         Location=model.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, float(z0)))),
+            ExtrudedDirection=model.create_entity("IfcDirection", DirectionRatios=(0.0, 0.0, 1.0)),
+            Depth=float(z1 - z0),
+        )
+        body.Items = [solid]
+        body.RepresentationType = "SweptSolid"
+        n += 1
+    return n
+
 
 def _sample_obj_worker(job: Tuple[int, str, dict, str, int]) -> Tuple[int, int]:
     """
@@ -1733,18 +1828,22 @@ class DataPreprocessor:
         """
         work_folder = Path(work_folder)
         input_ifcs_dir = work_folder / "input" / "input_ifcs"
-        base_ifc_path = input_ifcs_dir / "Data_base_1.ifc"
+        plan = load_plan(work_folder)
+        base_ifc_path = input_ifcs_dir / plan["base_ifc"]
         if not base_ifc_path.exists():
-            base_ifc_path = Path("data/input/input_ifcs/Data_base_1.ifc")
+            base_ifc_path = Path("data/input/input_ifcs") / plan["base_ifc"]
         if not base_ifc_path.exists():
-            raise FileNotFoundError(f"Data_base_1.ifc not found at {base_ifc_path}")
+            raise FileNotFoundError(f"{plan['base_ifc']} not found at {base_ifc_path}")
             
         logger.info(f"Generating wall variants IFC from: {base_ifc_path}")
         model = ifcopenshell.open(str(base_ifc_path))
+        if plan.get("normalize_walls"):
+            n_norm = normalize_layered_walls(model)
+            logger.info(f"normalize_walls: {n_norm} multi-solid walls rewritten as single extrusions")
         
         # Target elements GUIDs
-        LEFT_WALL_GUID = "02414yPEv25fF9z0uqxlni"
-        RIGHT_WALL_GUID = "3U2rKl8q5DVfhs17a5SE44"
+        LEFT_WALL_GUID = plan["left_wall"]
+        RIGHT_WALL_GUID = plan["right_wall"]
         
         left_wall = model.by_guid(LEFT_WALL_GUID)
         right_wall = model.by_guid(RIGHT_WALL_GUID)
@@ -1757,8 +1856,8 @@ class DataPreprocessor:
         right_wall.Tag = RIGHT_WALL_GUID
         
         # Also tag doors
-        LEFT_DOOR_GUID = "0XVTLR_9H3Ox9MAKGyWioT"
-        RIGHT_DOOR_GUID = "0i$VJnJOTDM92a$t1VH2bb"
+        LEFT_DOOR_GUID = plan["left_door"]
+        RIGHT_DOOR_GUID = plan["right_door"]
         left_door = model.by_guid(LEFT_DOOR_GUID)
         right_door = model.by_guid(RIGHT_DOOR_GUID)
         if left_door:
@@ -1769,21 +1868,95 @@ class DataPreprocessor:
         # Tag the six far-end windows with their original GUIDs so the combinatorial
         # graph step can identify them across augmented copies (GUIDs are regenerated
         # per copy; Tags survive). Order = left to right (see instructions.md).
-        for win_guid in (
-            "2eYTHUu89788SZxgL5ozO4", "2eYTHUu89788SZxgL5ozLa", "2eYTHUu89788SZxgL5ozP6",
-            "2eYTHUu89788SZxgL5ozUb", "2eYTHUu89788SZxgL5ozQu", "2eYTHUu89788SZxgL5ozSJ",
-        ):
+        for win_guid, _legacy_tag in plan["windows"]:
             win = model.by_guid(win_guid)
             if win:
                 win.Tag = win_guid
             else:
                 logger.warning(f"Far-end window {win_guid} not found in base IFC.")
             
+        def _is_reference_profile(body_rep) -> bool:
+            """True for the original export: one extrusion whose 5-point profile runs 0..L along x."""
+            if len(body_rep.Items) != 1 or not body_rep.Items[0].is_a("IfcExtrudedAreaSolid"):
+                return False
+            curve = body_rep.Items[0].SweptArea.OuterCurve
+            if not curve.is_a("IfcIndexedPolyCurve") or len(curve.Points.CoordList) != 5:
+                return False
+            xs = [c[0] for c in curve.Points.CoordList]
+            return abs(xs[2]) < 1e-6 and abs(xs[3]) < 1e-6 and min(xs) > -1e-6
+
+        def _wall_cross_section(wall, body_rep):
+            """(y_min, y_max) of the wall body across its axis, in file length units, measured
+            from the tessellated body in the wall's own placement (robust to per-layer solids,
+            centred or rotated profiles, and material sets without layer thicknesses)."""
+            st_local = ifcopenshell.geom.settings()
+            st_local.set("use-world-coords", False)
+            shape = ifcopenshell.geom.create_shape(st_local, wall, body_rep)  # keep a reference: geometry buffers die with it
+            v = np.array(shape.geometry.verts).reshape(-1, 3)
+            to_file = 1.0 / ifcopenshell.util.unit.calculate_unit_scale(model)  # geometry comes back in metres
+            return float(v[:, 1].min() * to_file), float(v[:, 1].max() * to_file)
+
+        def _duplicate_wall_generic(wall, new_length, axis_rep, body_rep):
+            """Variant body as ONE rectangular extrusion, x in [0, L] along the wall axis and
+            with the original cross-section, for exports that split the wall into per-layer solids or centre the
+            profile (Data_2.ifc). Same placement, extrusion direction and height as the original."""
+            y0, y1 = _wall_cross_section(wall, body_rep)
+            first = body_rep.Items[0]
+            axis_coords = [list(c) for c in axis_rep.Items[0].Points.CoordList]
+            axis_coords[1][0] = float(new_length)
+            pt_cls = "IfcCartesianPointList3D" if len(axis_coords[0]) == 3 else "IfcCartesianPointList2D"
+            new_axis_curve = model.create_entity(
+                "IfcIndexedPolyCurve",
+                Points=model.create_entity(pt_cls, CoordList=axis_coords),
+                SelfIntersect=False,
+            )
+            new_axis_rep = model.create_entity(
+                "IfcShapeRepresentation", ContextOfItems=axis_rep.ContextOfItems,
+                RepresentationIdentifier="Axis", RepresentationType=axis_rep.RepresentationType,
+                Items=[new_axis_curve],
+            )
+            L = float(new_length)
+            prof = [[L, y0], [L, y1], [0.0, y1], [0.0, y0], [L, y0]]
+            new_profile = model.create_entity(
+                "IfcArbitraryClosedProfileDef", ProfileType="AREA", ProfileName=first.SweptArea.ProfileName,
+                OuterCurve=model.create_entity(
+                    "IfcIndexedPolyCurve",
+                    Points=model.create_entity("IfcCartesianPointList2D", CoordList=prof),
+                    SelfIntersect=False,
+                ),
+            )
+            origin = model.create_entity("IfcAxis2Placement3D",
+                                         Location=model.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0)))
+            new_extruded = model.create_entity(
+                "IfcExtrudedAreaSolid", SweptArea=new_profile, Position=origin,
+                ExtrudedDirection=first.ExtrudedDirection, Depth=first.Depth,
+            )
+            new_body_rep = model.create_entity(
+                "IfcShapeRepresentation", ContextOfItems=body_rep.ContextOfItems,
+                RepresentationIdentifier="Body", RepresentationType="SweptSolid", Items=[new_extruded],
+            )
+            new_wall = model.create_entity(
+                "IfcWall", GlobalId=ifcopenshell.guid.new(), OwnerHistory=wall.OwnerHistory,
+                Name=f"{wall.Name}_L{new_length}", Description=wall.Description, ObjectType=wall.ObjectType,
+                ObjectPlacement=wall.ObjectPlacement,
+                Representation=model.create_entity("IfcProductDefinitionShape",
+                                                   Representations=[new_axis_rep, new_body_rep]),
+                Tag=f"{wall.GlobalId}_L{new_length}", PredefinedType=wall.PredefinedType,
+            )
+            containment = next((rel for rel in model.by_type("IfcRelContainedInSpatialStructure")
+                                if wall in rel.RelatedElements), None)
+            if containment:
+                containment.RelatedElements = list(containment.RelatedElements) + [new_wall]
+            return new_wall
+
         # Duplication helper
         def duplicate_wall(wall, new_length):
             axis_rep = next(r for r in wall.Representation.Representations if r.RepresentationIdentifier == 'Axis')
             body_rep = next(r for r in wall.Representation.Representations if r.RepresentationIdentifier == 'Body')
             
+            if not _is_reference_profile(body_rep):
+                return _duplicate_wall_generic(wall, new_length, axis_rep, body_rep)
+
             # Axis representation
             orig_axis_curve = axis_rep.Items[0]
             orig_axis_pts = orig_axis_curve.Points
@@ -1954,58 +2127,18 @@ class DataPreprocessor:
             f"(holding out {n_holdout} copy/copies as unseen test: aug ids {sorted(holdout_aug_ids) or 'none'})"
         )
         
-        # Room states config mapping Name to new Name
-        room_states_config = {
-            1: {
-                "100": "Toilet",
-                "101": "Store",
-                "102": "Bedroom",
-                "103": "LivingRoom",
-                "104": "Store",
-                "105": "Store",
-            },
-            2: {
-                "100": "Store",
-                "101": "Toilet",
-                "102": "Bedroom",
-                "103": "LivingRoom",
-                "104": "Store",
-                "105": "Store",
-            },
-            3: {
-                "100": "Store",
-                "101": "Store",
-                "102": "Bedroom",
-                "103": "LivingRoom",
-                "104": "Toilet",
-                "105": "Store",
-            },
-            4: {
-                "100": "Store",
-                "101": "Store",
-                "102": "Bedroom",
-                "103": "LivingRoom",
-                "104": "Store",
-                "105": "Toilet",
-            }
-        }
-        
+        plan = load_plan(work_folder)
+        room_states_config = plan["room_states"]
+
         # Target elements GUIDs/tags
-        LEFT_WALL_GUID = "02414yPEv25fF9z0uqxlni"
-        RIGHT_WALL_GUID = "3U2rKl8q5DVfhs17a5SE44"
-        LEFT_DOOR_GUID = "0XVTLR_9H3Ox9MAKGyWioT"
-        RIGHT_DOOR_GUID = "0i$VJnJOTDM92a$t1VH2bb"
+        LEFT_WALL_GUID = plan["left_wall"]
+        RIGHT_WALL_GUID = plan["right_wall"]
+        LEFT_DOOR_GUID = plan["left_door"]
+        RIGHT_DOOR_GUID = plan["right_door"]
         
         # Six far-end windows, LEFT TO RIGHT (see instructions.md). Matched by Tag:
         # new variant IFCs carry the GUID as Tag; older exports carry the Revit numeric tag.
-        WINDOW_TAGS = [
-            ("2eYTHUu89788SZxgL5ozO4", "1667718"),
-            ("2eYTHUu89788SZxgL5ozLa", "1667558"),
-            ("2eYTHUu89788SZxgL5ozP6", "1667780"),
-            ("2eYTHUu89788SZxgL5ozUb", "1667879"),
-            ("2eYTHUu89788SZxgL5ozQu", "1667642"),
-            ("2eYTHUu89788SZxgL5ozSJ", "1667985"),
-        ]
+        WINDOW_TAGS = [tuple(w) for w in plan["windows"]]
         SYNTH_DOOR_ID = "TARGET_DOOR_SYNTH"
         WIN_TYPE1, WIN_TYPE2 = "WIN_TYPE1", "WIN_TYPE2"
         NUM_POSITIONS = 6
@@ -2096,6 +2229,14 @@ class DataPreprocessor:
             axis = list(left_tpl.get("host_wall_axis") or [1.0, 0.0])
             s_left = float(left_tpl.get("wall_s") or 0.0)
             s_right = float(right_tpl.get("wall_s") or 0.0)
+            if plan.get("recentre_slots"):
+                # Anchor the slots on the midpoint of the two template doors rather than the
+                # host-wall centre (plan 2: Revit wall joins shift the wall centre by a few cm).
+                # A pure re-parameterisation: world positions are unchanged, the slots become
+                # symmetric in s, so side = sign(s) still splits slots 1-3 from 4-6.
+                mid = 0.5 * (s_left + s_right)
+                wc = [wc[0] + mid * axis[0], wc[1] + mid * axis[1]]
+                s_left, s_right = s_left - mid, s_right - mid
             host_wall_key = next(
                 (l.get("start") for l in links if l.get("type") == "HAS_DOOR" and l.get("end") == left_key),
                 None,
